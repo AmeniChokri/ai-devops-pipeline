@@ -59,10 +59,16 @@ jobs:
 
   deploy-to-kind:
     needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      
+    - name: Set lowercase repository name
+      run: |
+        echo "LOWERCASE_REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
       
     - name: Create Kind Kubernetes Cluster
       uses: helm/kind-action@v1.5.0
@@ -71,9 +77,9 @@ jobs:
         wait: 120s
         version: v0.20.0
       
-    - name: Set lowercase repository name
+    - name: Pull Docker image from GHCR
       run: |
-        echo "LOWERCASE_REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+        docker pull ghcr.io/${{ env.LOWERCASE_REPO }}:latest
       
     - name: Load Docker image into Kind
       run: |
@@ -88,8 +94,18 @@ jobs:
       
     - name: Test Application
       run: |
+        # Wait for pods to be ready
+        kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=60s
+        
         # Port-forward to access the service
         kubectl port-forward service/sfe-devops-app-service 8080:80 &
         sleep 5
+        
+        # Test endpoints
+        echo "Testing /health endpoint..."
         curl http://localhost:8080/health
+        
+        echo -e "\n\nTesting / endpoint..."
         curl http://localhost:8080/
+        
+        echo -e "\n\n✅ Deployment successful!"
