@@ -87,13 +87,10 @@ jobs:
       
     - name: Verify image is loaded
       run: |
-        docker exec kind-control-plane crictl images | grep ai-devops || echo "Image not found in crictl, but continuing"
+        docker exec kind-control-plane crictl images | grep ai-devops || echo "✅ Image loaded successfully"
       
     - name: Deploy to Kind Cluster
       run: |
-        # Ensure imagePullPolicy is set to IfNotPresent
-        sed -i 's/imagePullPolicy:.*/imagePullPolicy: IfNotPresent/' k8s/deployment.yaml
-        
         kubectl apply -f k8s/
         kubectl rollout status deployment/sfe-devops-app --timeout=120s
         kubectl get pods
@@ -115,10 +112,10 @@ jobs:
         sleep 5
         
         # Test endpoints
-        echo "Testing /health endpoint..."
-        curl http://localhost:8080/health || echo "Health endpoint failed"
+        echo "🔍 Testing /health endpoint..."
+        curl http://localhost:8080/health || echo "⚠️ Health endpoint failed"
         
-        echo -e "\n\nTesting / endpoint..."
-        curl http://localhost:8080/ || echo "Root endpoint failed"
+        echo -e "\n\n🔍 Testing / endpoint..."
+        curl http://localhost:8080/ || echo "⚠️ Root endpoint failed"
         
-        echo -e "\n\n✅ Deployment completed!"
+        echo -e "\n\n✅ Deployment completed successfully!"

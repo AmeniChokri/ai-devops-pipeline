@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: app
-        image: ai-devops-app:latest
+        image: ghcr.io/amenichokri/ai-devops-pipeline:latest
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
