@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sfe-devops-app
+  labels:
+    app: sfe-devops-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sfe-devops-app
+  template:
+    metadata:
+      labels:
+        app: sfe-devops-app
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/YOUR_GITHUB_USERNAME/sfe-devops-pipeline:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+        env:
+        - name: ENV
+          value: "production"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
