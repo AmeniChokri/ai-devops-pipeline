@@ -57,24 +57,39 @@ jobs:
         push: true
         tags: ghcr.io/${{ env.LOWERCASE_REPO }}:latest
 
-  deploy:
+  deploy-to-kind:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
       
-    - name: Setup kubectl
-      uses: azure/setup-kubectl@v3
+    - name: Create Kind Kubernetes Cluster
+      uses: helm/kind-action@v1.5.0
+      with:
+        cluster_name: kind
+        wait: 120s
+        version: v0.20.0
       
-    - name: Configure Kubeconfig
+    - name: Set lowercase repository name
       run: |
-        mkdir -p $HOME/.kube
-        echo "${{ secrets.KUBECONFIG }}" | base64 --decode > $HOME/.kube/config
-        
-    - name: Deploy to Kubernetes
+        echo "LOWERCASE_REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+      
+    - name: Load Docker image into Kind
+      run: |
+        kind load docker-image ghcr.io/${{ env.LOWERCASE_REPO }}:latest --name kind
+      
+    - name: Deploy to Kind Cluster
       run: |
         kubectl apply -f k8s/
         kubectl rollout status deployment/sfe-devops-app
+        kubectl get pods
+        kubectl get services
+      
+    - name: Test Application
+      run: |
+        # Port-forward to access the service
+        kubectl port-forward service/sfe-devops-app-service 8080:80 &
+        sleep 5
+        curl http://localhost:8080/health
+        curl http://localhost:8080/
