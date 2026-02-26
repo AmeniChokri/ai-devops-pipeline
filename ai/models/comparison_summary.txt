@@ -1,0 +1,25 @@
+
+# Anomaly Detection Model Comparison Summary
+
+## Dataset: CPU Utilization Time Series
+- 18050 samples with 11 features
+
+## Models Compared:
+                  Model  Precision    Recall  F1-Score  Time (s)
+0      Isolation Forest   0.258172  0.429889  0.322603     0.190
+1         One-Class SVM   0.228635  0.380074  0.285516     2.760
+4                DBSCAN   0.074667  0.852399  0.137306     1.497
+3  Local Outlier Factor   0.104332  0.157749  0.125597     2.373
+2     Elliptic Envelope   0.002770  0.004613  0.003461     2.490
+
+## Best Model: Isolation Forest
+- F1-Score: 0.323
+- Precision: 0.258
+- Recall: 0.430
+- Training Time: 0.190s
+
+## Why Isolation Forest for DevOps:
+1. Fast enough for real-time prediction
+2. No labeled data required
+3. Handles multiple metrics
+4. Proven in production environments
