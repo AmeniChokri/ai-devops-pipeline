@@ -36,3 +36,30 @@ docker run -p 5000:5000 sfe-devops-app
 
 # Deploy to local K8s
 kubectl apply -f k8s/
+## Monitoring Stack (Phase 2)
+
+The project includes a complete monitoring stack with Prometheus and Grafana for real-time metrics collection and visualization.
+
+**Note:** The monitoring stack is set up manually and is not part of the CI/CD pipeline.
+
+### Prerequisites for Monitoring
+- Helm (already installed if you completed Phase 1)
+- kubectl configured to use minikube
+
+### Deploy Monitoring Stack
+
+Run these commands **once** to set up monitoring:
+
+```bash
+# Add Prometheus Helm repository
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+# Create monitoring namespace
+kubectl create namespace monitoring
+
+# Install Prometheus stack with Grafana
+helm install prometheus prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --set grafana.enabled=true \
+  --set grafana.service.type=NodePort
