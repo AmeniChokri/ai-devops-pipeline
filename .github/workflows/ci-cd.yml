@@ -57,8 +57,68 @@ jobs:
         push: true
         tags: ghcr.io/${{ env.LOWERCASE_REPO }}:latest
 
-  deploy-to-kind:
+  check-ai-risk:
     needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Install jq and bc (for JSON parsing and math)
+      run: sudo apt-get update && sudo apt-get install -y jq bc
+      
+    - name: Get current metrics (simulated for demo)
+      run: |
+        # In production, this would fetch real metrics from Prometheus
+        # For demo, we'll use a random value between 0-100
+        METRIC_VALUE=$(( RANDOM % 100 ))
+        echo "METRIC_VALUE=$METRIC_VALUE" >> $GITHUB_ENV
+        echo "Current metric value: $METRIC_VALUE"
+        
+    - name: Call AI service for risk assessment
+      run: |
+        # For GitHub Actions, we need to port-forward or use a public endpoint
+        # Since this is a demo, we'll simulate the AI call
+        # In production, you'd have a publicly accessible AI service
+        
+        echo "🔍 Analyzing metrics with AI model..."
+        echo "Current value: ${{ env.METRIC_VALUE }}"
+        
+        # Simulated AI response based on metric value
+        if [ ${{ env.METRIC_VALUE }} -gt 80 ]; then
+          RISK_SCORE=85
+          echo "❌ HIGH RISK DETECTED: Risk score $RISK_SCORE%"
+          echo "Action: Blocking deployment - Auto-rollback recommended"
+          echo "RISK_STATUS=high" >> $GITHUB_ENV
+          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+          exit 1
+        elif [ ${{ env.METRIC_VALUE }} -gt 50 ]; then
+          RISK_SCORE=65
+          echo "⚠️ MODERATE RISK: Risk score $RISK_SCORE%"
+          echo "Action: Manual review recommended before deployment"
+          echo "RISK_STATUS=moderate" >> $GITHUB_ENV
+          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+        else
+          RISK_SCORE=25
+          echo "✅ LOW RISK: Risk score $RISK_SCORE%"
+          echo "Action: Safe to proceed with deployment"
+          echo "RISK_STATUS=low" >> $GITHUB_ENV
+          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+        fi
+        
+    - name: Display risk assessment summary
+      run: |
+        echo "════════════════════════════════════════"
+        echo "    AI RISK ASSESSMENT SUMMARY"
+        echo "════════════════════════════════════════"
+        echo "• Metric Value: ${{ env.METRIC_VALUE }}"
+        echo "• Risk Score: ${{ env.RISK_SCORE }}%"
+        echo "• Risk Level: ${{ env.RISK_STATUS }}"
+        echo "════════════════════════════════════════"
+
+  deploy-to-kind:
+    needs: [build-and-push, check-ai-risk]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     
