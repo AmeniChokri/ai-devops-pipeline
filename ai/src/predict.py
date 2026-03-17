@@ -3,7 +3,7 @@ AI Prediction Service for DevOps Anomaly Detection
 Loads trained Isolation Forest model and uses Prometheus metrics for real-time predictions
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 import joblib
 import numpy as np
@@ -13,6 +13,8 @@ import requests
 import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import prometheus_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +26,13 @@ app = FastAPI(
     description="AI-powered anomaly detection for CI/CD pipeline using Isolation Forest",
     version="1.0.0"
 )
+
+# Prometheus metrics for AI service
+ai_requests_total = Counter('ai_requests_total', 'Total AI prediction requests', ['endpoint'])
+ai_risk_score = Gauge('risk_score', 'Current risk score from AI model')
+ai_confidence = Gauge('confidence', 'Model confidence score')
+ai_anomaly_score = Gauge('anomaly_score', 'Raw anomaly score from model')
+ai_prediction_latency = Histogram('ai_prediction_latency_seconds', 'Prediction latency')
 
 # Global variables for model and scaler
 model = None
@@ -273,14 +282,19 @@ async def health():
     """Health check endpoint"""
     return {"status": "healthy", "model_loaded": model is not None}
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint - returns proper text format"""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
 @app.get("/prometheus/status", response_model=PrometheusStatus)
 async def prometheus_status():
     """Check Prometheus connection status and return current metrics"""
     try:
-        metrics = await fetch_prometheus_metrics()
+        metrics_data = await fetch_prometheus_metrics()
         return PrometheusStatus(
             connected=True,
-            metrics=metrics
+            metrics=metrics_data
         )
     except Exception as e:
         return PrometheusStatus(
@@ -295,10 +309,14 @@ async def predict(data: Optional[MetricsData] = None):
     Predict anomaly risk.
     If data is provided, use it. Otherwise fetch live metrics from Prometheus.
     """
+    # Record metrics
+    ai_requests_total.labels(endpoint='/predict').inc()
+    start_time = time.time()
+    
     # Fetch metrics (either from input or Prometheus)
     if data and data.value is not None:
         # Use provided data
-        metrics = {
+        metrics_data = {
             'value': data.value,
             'hour': data.hour or datetime.now().hour,
             'day_of_week': data.day_of_week or datetime.now().weekday(),
@@ -312,17 +330,17 @@ async def predict(data: Optional[MetricsData] = None):
     else:
         # Fetch from Prometheus
         logger.info("Fetching live metrics from Prometheus...")
-        metrics = await fetch_prometheus_metrics()
-        logger.info(f"Live metrics: CPU={metrics['cpu_usage']:.1f}%, "
-                   f"Memory={metrics['memory_usage']:.1f}%, "
-                   f"Requests={metrics['request_rate']:.1f}/s, "
-                   f"Errors={metrics['error_rate']:.2f}%")
+        metrics_data = await fetch_prometheus_metrics()
+        logger.info(f"Live metrics: CPU={metrics_data['cpu_usage']:.1f}%, "
+                   f"Memory={metrics_data['memory_usage']:.1f}%, "
+                   f"Requests={metrics_data['request_rate']:.1f}/s, "
+                   f"Errors={metrics_data['error_rate']:.2f}%")
     
     # If real model is loaded, use it
     if model is not None:
         try:
             # Prepare features
-            features = prepare_features(metrics)
+            features = prepare_features(metrics_data)
             
             # Scale features if scaler is available
             if scaler is not None:
@@ -343,12 +361,12 @@ async def predict(data: Optional[MetricsData] = None):
             
         except Exception as e:
             logger.error(f"Error during model prediction: {e}")
-            return fallback_prediction(metrics)
+            return fallback_prediction(metrics_data)
     
     else:
         # Use fallback logic if no model is loaded
         logger.warning("No model loaded, using fallback prediction")
-        return fallback_prediction(metrics)
+        return fallback_prediction(metrics_data)
     
     # Generate recommendation based on risk score
     if risk_score > 80:
@@ -360,12 +378,18 @@ async def predict(data: Optional[MetricsData] = None):
     
     # Prepare metrics used for response
     metrics_used = {
-        "cpu_usage": round(metrics['cpu_usage'], 2),
-        "memory_usage": round(metrics['memory_usage'], 2),
-        "request_rate": round(metrics['request_rate'], 2),
-        "error_rate": round(metrics['error_rate'], 2),
-        "combined_value": round(metrics['value'], 2)
+        "cpu_usage": round(metrics_data['cpu_usage'], 2),
+        "memory_usage": round(metrics_data['memory_usage'], 2),
+        "request_rate": round(metrics_data['request_rate'], 2),
+        "error_rate": round(metrics_data['error_rate'], 2),
+        "combined_value": round(metrics_data['value'], 2)
     }
+    
+    # Update Prometheus metrics
+    ai_risk_score.set(risk_score)
+    ai_confidence.set(confidence)
+    ai_anomaly_score.set(anomaly_score)
+    ai_prediction_latency.observe(time.time() - start_time)
     
     return PredictionResponse(
         risk_score=round(risk_score, 2),
@@ -378,10 +402,10 @@ async def predict(data: Optional[MetricsData] = None):
         timestamp=datetime.now().isoformat()
     )
 
-def fallback_prediction(metrics: Dict[str, float]) -> PredictionResponse:
+def fallback_prediction(metrics_data: Dict[str, float]) -> PredictionResponse:
     """Fallback logic when model isn't available"""
-    value = metrics.get('value', 50)
-    error_rate = metrics.get('error_rate', 0)
+    value = metrics_data.get('value', 50)
+    error_rate = metrics_data.get('error_rate', 0)
     
     # Simple rule-based logic
     if value > 80 or error_rate > 5:
@@ -398,11 +422,11 @@ def fallback_prediction(metrics: Dict[str, float]) -> PredictionResponse:
         recommendation = "✅ LOW RISK (fallback): Safe to proceed"
     
     metrics_used = {
-        "cpu_usage": round(metrics.get('cpu_usage', 0), 2),
-        "memory_usage": round(metrics.get('memory_usage', 0), 2),
-        "request_rate": round(metrics.get('request_rate', 0), 2),
-        "error_rate": round(metrics.get('error_rate', 0), 2),
-        "combined_value": round(metrics.get('value', 0), 2)
+        "cpu_usage": round(metrics_data.get('cpu_usage', 0), 2),
+        "memory_usage": round(metrics_data.get('memory_usage', 0), 2),
+        "request_rate": round(metrics_data.get('request_rate', 0), 2),
+        "error_rate": round(metrics_data.get('error_rate', 0), 2),
+        "combined_value": round(metrics_data.get('value', 0), 2)
     }
     
     return PredictionResponse(
@@ -434,6 +458,26 @@ async def model_info():
         "feature_names": feature_columns,
         "status": "loaded",
         "scaler_loaded": scaler is not None
+    }
+
+@app.post("/predict/batch")
+async def predict_batch(values: List[float]):
+    """Batch prediction for multiple values"""
+    results = []
+    for val in values:
+        result = await predict(MetricsData(value=val))
+        results.append({
+            "value": val,
+            "risk_score": result.risk_score,
+            "is_anomaly": result.is_anomaly
+        })
+    return {
+        "results": results,
+        "summary": {
+            "total": len(results),
+            "anomalies": sum(1 for r in results if r["is_anomaly"]),
+            "avg_risk": sum(r["risk_score"] for r in results) / len(results)
+        }
     }
 
 if __name__ == "__main__":

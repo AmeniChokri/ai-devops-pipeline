@@ -13,6 +13,9 @@ requests==2.31.0
 pydantic==2.5.0
 python-multipart==0.0.6
 
+# Prometheus metrics
+prometheus_client==0.17.0
+
 # For notebooks (not needed in production but keeping for consistency)
 jupyter==1.0.0
 ipykernel==6.25.0

@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ai-anomaly-detection-monitor
+  namespace: monitoring
+  labels:
+    release: prometheus
+    app: ai-anomaly-detection
+spec:
+  selector:
+    matchLabels:
+      app: ai-anomaly-detection
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 15s
+  namespaceSelector:
+    matchNames:
+    - default
