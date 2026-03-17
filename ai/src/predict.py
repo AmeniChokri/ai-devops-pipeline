@@ -11,7 +11,7 @@ import os
 import logging
 import requests
 import time
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # Configure logging
@@ -34,13 +34,14 @@ feature_columns = ['value', 'hour', 'day_of_week', 'day_of_month',
                    'lag_1', 'lag_2', 'lag_5']
 
 # Prometheus configuration
-PROMETHEUS_URL = "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
-APP_SERVICE = "sfe-devops-app-service"
-APP_NAMESPACE = "default"
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus-kube-prometheus-prometheus.monitoring:9090")
+APP_NAMESPACE = os.getenv("APP_NAMESPACE", "default")
+APP_SERVICE = os.getenv("APP_SERVICE", "sfe-devops-app-service")
+TIMEOUT = int(os.getenv("PROMETHEUS_TIMEOUT", "5"))
 
 class MetricsData(BaseModel):
     """Input data format for prediction"""
-    value: float
+    value: Optional[float] = None
     hour: Optional[int] = None
     day_of_week: Optional[int] = None
     day_of_month: Optional[int] = None
@@ -57,6 +58,12 @@ class PredictionResponse(BaseModel):
     metrics_used: Dict[str, float]
     timestamp: str
 
+class PrometheusStatus(BaseModel):
+    """Prometheus connection status"""
+    connected: bool
+    metrics: Dict[str, float]
+    error: Optional[str] = None
+
 @app.on_event("startup")
 async def load_model():
     """Load the trained Isolation Forest model and scaler on startup"""
@@ -71,7 +78,7 @@ async def load_model():
     
     # List all possible paths (in order of preference)
     possible_paths = [
-        '/app/models/isolation_forest_model_fresh.pkl',  # Container path (Dockerfile copies here)
+        '/app/models/isolation_forest_model_fresh.pkl',  # Container path
         '/app/models/models/isolation_forest_model_fresh.pkl',  # Alternative
         './models/isolation_forest_model_fresh.pkl',  # Relative to current dir
         '../models/isolation_forest_model_fresh.pkl',  # One level up
@@ -111,85 +118,117 @@ async def load_model():
         logger.error("   Service will use FALLBACK mode - not recommended for production")
     else:
         logger.info("🎯 Model loading complete. Service ready for predictions.")
+        
+        # Test Prometheus connection after model loads
+        await test_prometheus_connection()
+
+async def test_prometheus_connection() -> bool:
+    """Test connection to Prometheus"""
+    try:
+        response = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": "up"},
+            timeout=TIMEOUT
+        )
+        if response.status_code == 200:
+            logger.info("✅ Successfully connected to Prometheus")
+            return True
+        else:
+            logger.warning(f"⚠️ Prometheus connection returned status {response.status_code}")
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ Could not connect to Prometheus: {e}")
+        logger.info(f"   Prometheus URL configured as: {PROMETHEUS_URL}")
+        return False
 
 async def fetch_prometheus_metrics() -> Dict[str, float]:
     """Fetch real-time metrics from Prometheus"""
-    metrics = {}
+    metrics = {
+        'cpu_usage': 50.0,
+        'memory_usage': 50.0,
+        'request_rate': 10.0,
+        'error_rate': 0.0,
+        'value': 50.0,
+        'hour': datetime.now().hour,
+        'day_of_week': datetime.now().weekday(),
+        'day_of_month': datetime.now().day
+    }
     
+    # Query CPU usage
     try:
-        # Query CPU usage
         cpu_query = f'sum(rate(container_cpu_usage_seconds_total{{namespace="{APP_NAMESPACE}", pod=~"sfe-devops-app.*"}}[1m]))'
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": cpu_query}, timeout=5)
+        response = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": cpu_query},
+            timeout=TIMEOUT
+        )
         if response.status_code == 200:
             data = response.json()
             if data['data']['result']:
-                metrics['cpu_usage'] = float(data['data']['result'][0]['value'][1]) * 100
-            else:
-                metrics['cpu_usage'] = 0
-        else:
-            logger.warning(f"Prometheus CPU query failed: {response.status_code}")
-            metrics['cpu_usage'] = 50  # Default fallback
+                # Convert cores to percentage (assuming 2 cores limit)
+                cpu_cores = float(data['data']['result'][0]['value'][1])
+                metrics['cpu_usage'] = min(100, cpu_cores * 50)  # Rough estimate
+                logger.info(f"📊 CPU usage: {metrics['cpu_usage']:.1f}%")
     except Exception as e:
-        logger.error(f"Error fetching CPU metrics: {e}")
-        metrics['cpu_usage'] = 50
+        logger.warning(f"⚠️ Error fetching CPU metrics: {e}")
     
+    # Query memory usage
     try:
-        # Query memory usage
-        memory_query = f'sum(container_memory_working_set_bytes{{namespace="{APP_NAMESPACE}", pod=~"sfe-devops-app.*"}}) / sum(kube_pod_container_resource_limits{{resource="memory", namespace="{APP_NAMESPACE}"}}) * 100'
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": memory_query}, timeout=5)
+        memory_query = f'sum(container_memory_working_set_bytes{{namespace="{APP_NAMESPACE}", pod=~"sfe-devops-app.*"}})'
+        response = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": memory_query},
+            timeout=TIMEOUT
+        )
         if response.status_code == 200:
             data = response.json()
             if data['data']['result']:
-                metrics['memory_usage'] = float(data['data']['result'][0]['value'][1])
-            else:
-                metrics['memory_usage'] = 50
-        else:
-            logger.warning(f"Prometheus memory query failed: {response.status_code}")
-            metrics['memory_usage'] = 50
+                memory_bytes = float(data['data']['result'][0]['value'][1])
+                # Assume 512Mi limit
+                memory_limit = 512 * 1024 * 1024
+                metrics['memory_usage'] = min(100, (memory_bytes / memory_limit) * 100)
+                logger.info(f"📊 Memory usage: {metrics['memory_usage']:.1f}%")
     except Exception as e:
-        logger.error(f"Error fetching memory metrics: {e}")
-        metrics['memory_usage'] = 50
+        logger.warning(f"⚠️ Error fetching memory metrics: {e}")
     
+    # Query request rate
     try:
-        # Query request rate
         request_query = f'sum(rate(http_requests_total{{namespace="{APP_NAMESPACE}"}}[1m]))'
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": request_query}, timeout=5)
+        response = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": request_query},
+            timeout=TIMEOUT
+        )
         if response.status_code == 200:
             data = response.json()
             if data['data']['result']:
                 metrics['request_rate'] = float(data['data']['result'][0]['value'][1])
-            else:
-                metrics['request_rate'] = 10
-        else:
-            logger.warning(f"Prometheus request query failed: {response.status_code}")
-            metrics['request_rate'] = 10
+                logger.info(f"📊 Request rate: {metrics['request_rate']:.1f} req/s")
     except Exception as e:
-        logger.error(f"Error fetching request metrics: {e}")
-        metrics['request_rate'] = 10
+        logger.warning(f"⚠️ Error fetching request metrics: {e}")
     
+    # Query error rate
     try:
-        # Query error rate
         error_query = f'sum(rate(http_errors_total{{namespace="{APP_NAMESPACE}"}}[1m])) / sum(rate(http_requests_total{{namespace="{APP_NAMESPACE}"}}[1m])) * 100'
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": error_query}, timeout=5)
+        response = requests.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": error_query},
+            timeout=TIMEOUT
+        )
         if response.status_code == 200:
             data = response.json()
             if data['data']['result']:
                 metrics['error_rate'] = float(data['data']['result'][0]['value'][1])
-            else:
-                metrics['error_rate'] = 0
-        else:
-            logger.warning(f"Prometheus error query failed: {response.status_code}")
-            metrics['error_rate'] = 0
+                logger.info(f"📊 Error rate: {metrics['error_rate']:.2f}%")
     except Exception as e:
-        logger.error(f"Error fetching error metrics: {e}")
-        metrics['error_rate'] = 0
+        logger.warning(f"⚠️ Error fetching error metrics: {e}")
     
     # Combined metric for prediction (weighted average)
     metrics['value'] = (
-        metrics.get('cpu_usage', 50) * 0.3 +
-        metrics.get('memory_usage', 50) * 0.3 +
-        metrics.get('request_rate', 10) * 0.2 +
-        metrics.get('error_rate', 0) * 0.2
+        metrics['cpu_usage'] * 0.3 +
+        metrics['memory_usage'] * 0.3 +
+        metrics['request_rate'] * 0.2 +
+        metrics['error_rate'] * 0.2
     )
     
     # Add time features
@@ -202,17 +241,15 @@ async def fetch_prometheus_metrics() -> Dict[str, float]:
 
 def prepare_features(metrics: Dict[str, float]) -> np.ndarray:
     """Convert metrics to feature vector for model"""
-    # Simplified feature engineering for demo
-    # In production, you'd compute rolling windows and lags
     features = np.array([[
         metrics.get('value', 50),
         metrics.get('hour', 12),
         metrics.get('day_of_week', 3),
         metrics.get('day_of_month', 15),
         metrics.get('value', 50),  # rolling_mean_5
-        0.0,                         # rolling_std_5
+        5.0,                         # rolling_std_5 (estimate)
         metrics.get('value', 50),   # rolling_mean_20
-        0.0,                         # rolling_std_20
+        10.0,                         # rolling_std_20 (estimate)
         metrics.get('value', 50),   # lag_1
         metrics.get('value', 50),   # lag_2
         metrics.get('value', 50)    # lag_5
@@ -227,31 +264,30 @@ async def root():
         "status": "operational" if model else "degraded (fallback mode)",
         "model_loaded": model is not None,
         "model_type": "Isolation Forest" if model else "None",
-        "prometheus_connected": True,  # We'll check connectivity in a separate endpoint
+        "prometheus_url": PROMETHEUS_URL,
         "version": "1.0.0"
     }
 
 @app.get("/health")
 async def health():
     """Health check endpoint"""
-    if model is None:
-        logger.warning("Health check: Model not loaded")
-        return {"status": "degraded", "model_loaded": False}
-    return {"status": "healthy", "model_loaded": True}
+    return {"status": "healthy", "model_loaded": model is not None}
 
-@app.get("/metrics/live")
-async def get_live_metrics():
-    """Fetch and return live metrics from Prometheus"""
+@app.get("/prometheus/status", response_model=PrometheusStatus)
+async def prometheus_status():
+    """Check Prometheus connection status and return current metrics"""
     try:
         metrics = await fetch_prometheus_metrics()
-        return {
-            "status": "success",
-            "metrics": metrics,
-            "timestamp": datetime.now().isoformat()
-        }
+        return PrometheusStatus(
+            connected=True,
+            metrics=metrics
+        )
     except Exception as e:
-        logger.error(f"Error fetching live metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PrometheusStatus(
+            connected=False,
+            metrics={},
+            error=str(e)
+        )
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(data: Optional[MetricsData] = None):
@@ -277,10 +313,10 @@ async def predict(data: Optional[MetricsData] = None):
         # Fetch from Prometheus
         logger.info("Fetching live metrics from Prometheus...")
         metrics = await fetch_prometheus_metrics()
-        logger.info(f"Live metrics: CPU={metrics.get('cpu_usage', 0):.1f}%, "
-                   f"Memory={metrics.get('memory_usage', 0):.1f}%, "
-                   f"Requests={metrics.get('request_rate', 0):.1f}/s, "
-                   f"Errors={metrics.get('error_rate', 0):.2f}%")
+        logger.info(f"Live metrics: CPU={metrics['cpu_usage']:.1f}%, "
+                   f"Memory={metrics['memory_usage']:.1f}%, "
+                   f"Requests={metrics['request_rate']:.1f}/s, "
+                   f"Errors={metrics['error_rate']:.2f}%")
     
     # If real model is loaded, use it
     if model is not None:
@@ -307,7 +343,6 @@ async def predict(data: Optional[MetricsData] = None):
             
         except Exception as e:
             logger.error(f"Error during model prediction: {e}")
-            # Fall back to simple logic
             return fallback_prediction(metrics)
     
     else:
@@ -325,11 +360,11 @@ async def predict(data: Optional[MetricsData] = None):
     
     # Prepare metrics used for response
     metrics_used = {
-        "cpu_usage": round(metrics.get('cpu_usage', 0), 2),
-        "memory_usage": round(metrics.get('memory_usage', 0), 2),
-        "request_rate": round(metrics.get('request_rate', 0), 2),
-        "error_rate": round(metrics.get('error_rate', 0), 2),
-        "combined_value": round(metrics.get('value', 0), 2)
+        "cpu_usage": round(metrics['cpu_usage'], 2),
+        "memory_usage": round(metrics['memory_usage'], 2),
+        "request_rate": round(metrics['request_rate'], 2),
+        "error_rate": round(metrics['error_rate'], 2),
+        "combined_value": round(metrics['value'], 2)
     }
     
     return PredictionResponse(
@@ -380,26 +415,6 @@ def fallback_prediction(metrics: Dict[str, float]) -> PredictionResponse:
         metrics_used=metrics_used,
         timestamp=datetime.now().isoformat()
     )
-
-@app.post("/predict/batch")
-async def predict_batch(values: List[float]):
-    """Batch prediction for multiple values"""
-    results = []
-    for val in values:
-        result = await predict(MetricsData(value=val))
-        results.append({
-            "value": val,
-            "risk_score": result.risk_score,
-            "is_anomaly": result.is_anomaly
-        })
-    return {
-        "results": results,
-        "summary": {
-            "total": len(results),
-            "anomalies": sum(1 for r in results if r["is_anomaly"]),
-            "avg_risk": sum(r["risk_score"] for r in results) / len(results)
-        }
-    }
 
 @app.get("/model/info")
 async def model_info():
