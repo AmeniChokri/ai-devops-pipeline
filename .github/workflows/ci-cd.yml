@@ -37,6 +37,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     
     steps:
     - name: Checkout code
@@ -52,6 +53,14 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Verify AI directory structure
+      run: |
+        echo "Checking AI directory structure..."
+        ls -la ai/ || echo "ai directory not found"
+        ls -la ai/src/ || echo "src directory not found"
+        ls -la ai/models/ || echo "models directory not found"
+        echo "✅ Directory check complete"
         
     - name: Build and push app Docker image
       uses: docker/build-push-action@v4
@@ -147,8 +156,6 @@ jobs:
         sleep 10
       
     - name: Create GHCR secret for image pulling
-      env:
-        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         kubectl create secret docker-registry ghcr-secret \
           --docker-server=ghcr.io \
@@ -175,6 +182,7 @@ jobs:
       
     - name: Verify images are loaded
       run: |
+        echo "📦 Checking loaded images in Kind cluster..."
         docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl, but continuing"
       
     - name: Deploy applications to Kind Cluster
@@ -183,11 +191,11 @@ jobs:
         kubectl apply -f k8s/
         
         # Wait for app deployment
-        echo "Waiting for app deployment to be ready..."
+        echo "⏳ Waiting for app deployment to be ready..."
         kubectl rollout status deployment/sfe-devops-app --timeout=180s
         
         # Wait for AI deployment
-        echo "Waiting for AI deployment to be ready..."
+        echo "⏳ Waiting for AI deployment to be ready..."
         kubectl rollout status deployment/ai-anomaly-detection --timeout=180s || echo "⚠️ AI deployment timeout - check logs"
         
         # Show pod status
@@ -214,29 +222,32 @@ jobs:
     - name: Test Application
       run: |
         # Wait for pods to be ready
-        echo "Waiting for pods to be ready..."
+        echo "⏳ Waiting for pods to be ready..."
         kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=120s || true
         kubectl wait --for=condition=ready pod -l app=ai-anomaly-detection --timeout=120s || true
         
-        # Port-forward to access the service
+        # Port-forward to access the app service
+        echo "🔌 Setting up port-forward for app..."
         kubectl port-forward service/sfe-devops-app-service 8080:80 &
         PF_PID=$!
         sleep 10
         
-        # Test endpoints
+        # Test app endpoints
         echo "🔍 Testing /health endpoint..."
         curl -s http://localhost:8080/health || echo "⚠️ Health endpoint failed"
         
         echo -e "\n\n🔍 Testing / endpoint..."
         curl -s http://localhost:8080/ || echo "⚠️ Root endpoint failed"
         
+        # Test AI service health
         echo -e "\n\n🔍 Testing AI service health..."
         kubectl port-forward service/ai-anomaly-detection-service 8000:8000 &
         AI_PF_PID=$!
         sleep 5
         curl -s http://localhost:8000/health || echo "⚠️ AI health endpoint failed"
+        curl -s http://localhost:8000/model/info || echo "⚠️ AI model info failed"
         
         # Kill port-forward processes
         kill $PF_PID $AI_PF_PID 2>/dev/null || true
         
-        echo -e "\n\n✅ Deployment validation completed!"
+        echo -e "\n\n✅ Deployment validation completed successfully!"
