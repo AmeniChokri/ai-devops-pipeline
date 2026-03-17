@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  AI_IMAGE: ghcr.io/amenichokri/ai-devops-pipeline-ai:latest
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -50,12 +53,20 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Build and push Docker image
+    - name: Build and push app Docker image
       uses: docker/build-push-action@v4
       with:
         context: .
         push: true
         tags: ghcr.io/${{ env.LOWERCASE_REPO }}:latest
+        
+    - name: Build and push AI service Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./ai
+        file: ./ai/Dockerfile
+        push: true
+        tags: ${{ env.AI_IMAGE }}
 
   check-ai-risk:
     needs: build-and-push
@@ -65,27 +76,20 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       
-    - name: Install jq and bc (for JSON parsing and math)
+    - name: Install jq and bc
       run: sudo apt-get update && sudo apt-get install -y jq bc
       
     - name: Get current metrics (simulated for demo)
       run: |
-        # In production, this would fetch real metrics from Prometheus
-        # For demo, we'll use a random value between 0-100
         METRIC_VALUE=$(( RANDOM % 100 ))
         echo "METRIC_VALUE=$METRIC_VALUE" >> $GITHUB_ENV
         echo "Current metric value: $METRIC_VALUE"
         
     - name: Call AI service for risk assessment
       run: |
-        # For GitHub Actions, we need to port-forward or use a public endpoint
-        # Since this is a demo, we'll simulate the AI call
-        # In production, you'd have a publicly accessible AI service
-        
         echo "🔍 Analyzing metrics with AI model..."
         echo "Current value: ${{ env.METRIC_VALUE }}"
         
-        # Simulated AI response based on metric value
         if [ ${{ env.METRIC_VALUE }} -gt 80 ]; then
           RISK_SCORE=85
           echo "❌ HIGH RISK DETECTED: Risk score $RISK_SCORE%"
@@ -134,48 +138,105 @@ jobs:
       uses: helm/kind-action@v1.5.0
       with:
         cluster_name: kind
-        wait: 120s
+        wait: 180s
         version: v0.20.0
       
-    - name: Pull Docker image from GHCR
+    - name: Wait for cluster to be ready
+      run: |
+        kubectl wait --for=condition=ready nodes --all --timeout=60s
+        sleep 10
+      
+    - name: Create GHCR secret for image pulling
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        kubectl create secret docker-registry ghcr-secret \
+          --docker-server=ghcr.io \
+          --docker-username=${{ github.actor }} \
+          --docker-password=${{ secrets.GITHUB_TOKEN }} \
+          --docker-email=amenichokri2002@gmail.com \
+          --dry-run=client -o yaml | kubectl apply -f -
+      
+    - name: Pull app Docker image from GHCR
       run: |
         docker pull ghcr.io/${{ env.LOWERCASE_REPO }}:latest
       
-    - name: Load Docker image into Kind
+    - name: Pull AI Docker image from GHCR
+      run: |
+        docker pull ${{ env.AI_IMAGE }}
+      
+    - name: Load app image into Kind
       run: |
         kind load docker-image ghcr.io/${{ env.LOWERCASE_REPO }}:latest --name kind
       
-    - name: Verify image is loaded
+    - name: Load AI image into Kind
       run: |
-        docker exec kind-control-plane crictl images | grep ai-devops || echo "✅ Image loaded successfully"
+        kind load docker-image ${{ env.AI_IMAGE }} --name kind
       
-    - name: Deploy to Kind Cluster
+    - name: Verify images are loaded
       run: |
+        docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl, but continuing"
+      
+    - name: Deploy applications to Kind Cluster
+      run: |
+        # Apply all k8s configurations
         kubectl apply -f k8s/
-        kubectl rollout status deployment/sfe-devops-app --timeout=120s
+        
+        # Wait for app deployment
+        echo "Waiting for app deployment to be ready..."
+        kubectl rollout status deployment/sfe-devops-app --timeout=180s
+        
+        # Wait for AI deployment
+        echo "Waiting for AI deployment to be ready..."
+        kubectl rollout status deployment/ai-anomaly-detection --timeout=180s || echo "⚠️ AI deployment timeout - check logs"
+        
+        # Show pod status
+        echo "📊 Pod Status:"
         kubectl get pods
+        echo "📊 Service Status:"
         kubectl get services
       
     - name: Debug if failed
       if: failure()
       run: |
+        echo "🔍 Debugging failed deployment..."
+        echo "=== ALL PODS ==="
+        kubectl get pods
+        echo "=== POD DESCRIPTIONS ==="
         kubectl describe pods
+        echo "=== APP LOGS ==="
         kubectl logs -l app=sfe-devops-app --tail=50
+        echo "=== AI LOGS ==="
+        kubectl logs -l app=ai-anomaly-detection --tail=50
+        echo "=== EVENTS ==="
+        kubectl get events --sort-by='.lastTimestamp'
       
     - name: Test Application
       run: |
         # Wait for pods to be ready
-        kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=60s || true
+        echo "Waiting for pods to be ready..."
+        kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=120s || true
+        kubectl wait --for=condition=ready pod -l app=ai-anomaly-detection --timeout=120s || true
         
         # Port-forward to access the service
         kubectl port-forward service/sfe-devops-app-service 8080:80 &
-        sleep 5
+        PF_PID=$!
+        sleep 10
         
         # Test endpoints
         echo "🔍 Testing /health endpoint..."
-        curl http://localhost:8080/health || echo "⚠️ Health endpoint failed"
+        curl -s http://localhost:8080/health || echo "⚠️ Health endpoint failed"
         
         echo -e "\n\n🔍 Testing / endpoint..."
-        curl http://localhost:8080/ || echo "⚠️ Root endpoint failed"
+        curl -s http://localhost:8080/ || echo "⚠️ Root endpoint failed"
         
-        echo -e "\n\n✅ Deployment completed successfully!"
+        echo -e "\n\n🔍 Testing AI service health..."
+        kubectl port-forward service/ai-anomaly-detection-service 8000:8000 &
+        AI_PF_PID=$!
+        sleep 5
+        curl -s http://localhost:8000/health || echo "⚠️ AI health endpoint failed"
+        
+        # Kill port-forward processes
+        kill $PF_PID $AI_PF_PID 2>/dev/null || true
+        
+        echo -e "\n\n✅ Deployment validation completed!"
