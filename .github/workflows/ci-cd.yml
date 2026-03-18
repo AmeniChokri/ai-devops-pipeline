@@ -8,6 +8,7 @@ on:
 
 env:
   AI_IMAGE: ghcr.io/amenichokri/ai-devops-pipeline-ai:latest
+  AI_PUBLIC_URL: https://nonskeptical-jerald-nonformalistic.ngrok-free.dev
 
 jobs:
   test:
@@ -88,46 +89,48 @@ jobs:
     - name: Install jq and bc
       run: sudo apt-get update && sudo apt-get install -y jq bc
       
-    - name: Get current metrics (simulated for demo)
+    - name: Call AI service for REAL risk assessment
+      env:
+        AI_PUBLIC_URL: ${{ env.AI_PUBLIC_URL }}
       run: |
-        METRIC_VALUE=$(( RANDOM % 100 ))
-        echo "METRIC_VALUE=$METRIC_VALUE" >> $GITHUB_ENV
-        echo "Current metric value: $METRIC_VALUE"
+        echo "🔍 Getting REAL risk assessment from AI service at $AI_PUBLIC_URL..."
+        echo "This uses actual Prometheus metrics from your running cluster!"
         
-    - name: Call AI service for risk assessment
-      run: |
-        echo "🔍 Analyzing metrics with AI model..."
-        echo "Current value: ${{ env.METRIC_VALUE }}"
+        # Call the real AI service via ngrok
+        RESPONSE=$(curl -s -X POST ${AI_PUBLIC_URL}/predict \
+          -H "Content-Type: application/json" \
+          -H "ngrok-skip-browser-warning: true" \
+          -d '{}')
         
-        if [ ${{ env.METRIC_VALUE }} -gt 80 ]; then
-          RISK_SCORE=85
-          echo "❌ HIGH RISK DETECTED: Risk score $RISK_SCORE%"
-          echo "Action: Blocking deployment - Auto-rollback recommended"
-          echo "RISK_STATUS=high" >> $GITHUB_ENV
-          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+        # Extract risk score from response
+        RISK_SCORE=$(echo $RESPONSE | jq -r '.risk_score')
+        IS_ANOMALY=$(echo $RESPONSE | jq -r '.is_anomaly')
+        RECOMMENDATION=$(echo $RESPONSE | jq -r '.recommendation')
+        METRICS=$(echo $RESPONSE | jq -r '.metrics_used')
+        
+        echo "📊 REAL Risk Score: $RISK_SCORE%"
+        echo "🔍 Is Anomaly: $IS_ANOMALY"
+        echo "💬 Recommendation: $RECOMMENDATION"
+        echo "📈 Metrics Used: $METRICS"
+        
+        # Decision logic based on REAL risk score
+        if (( $(echo "$RISK_SCORE > 80" | bc -l) )); then
+          echo "❌ HIGH RISK DETECTED! Blocking deployment - Auto-rollback recommended"
+          echo "Risk score $RISK_SCORE% exceeds threshold (80%)"
           exit 1
-        elif [ ${{ env.METRIC_VALUE }} -gt 50 ]; then
-          RISK_SCORE=65
-          echo "⚠️ MODERATE RISK: Risk score $RISK_SCORE%"
-          echo "Action: Manual review recommended before deployment"
-          echo "RISK_STATUS=moderate" >> $GITHUB_ENV
-          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+        elif (( $(echo "$RISK_SCORE > 50" | bc -l) )); then
+          echo "⚠️ MODERATE RISK. Manual review recommended before deployment."
         else
-          RISK_SCORE=25
-          echo "✅ LOW RISK: Risk score $RISK_SCORE%"
-          echo "Action: Safe to proceed with deployment"
-          echo "RISK_STATUS=low" >> $GITHUB_ENV
-          echo "RISK_SCORE=$RISK_SCORE" >> $GITHUB_ENV
+          echo "✅ LOW RISK. Proceeding with deployment."
         fi
         
     - name: Display risk assessment summary
       run: |
         echo "════════════════════════════════════════"
-        echo "    AI RISK ASSESSMENT SUMMARY"
+        echo "    REAL AI RISK ASSESSMENT SUMMARY"
         echo "════════════════════════════════════════"
-        echo "• Metric Value: ${{ env.METRIC_VALUE }}"
         echo "• Risk Score: ${{ env.RISK_SCORE }}%"
-        echo "• Risk Level: ${{ env.RISK_STATUS }}"
+        echo "• Source: Real Prometheus metrics via ngrok"
         echo "════════════════════════════════════════"
 
   deploy-to-kind:
@@ -239,13 +242,9 @@ jobs:
         echo -e "\n\n🔍 Testing / endpoint..."
         curl -s http://localhost:8080/ || echo "⚠️ Root endpoint failed"
         
-        # Test AI service health
-        echo -e "\n\n🔍 Testing AI service health..."
-        kubectl port-forward service/ai-anomaly-detection-service 8000:8000 &
-        AI_PF_PID=$!
-        sleep 5
-        curl -s http://localhost:8000/health || echo "⚠️ AI health endpoint failed"
-        curl -s http://localhost:8000/model/info || echo "⚠️ AI model info failed"
+        # Test AI service health via ngrok (just to verify)
+        echo -e "\n\n🔍 Testing AI service via ngrok..."
+        curl -s -H "ngrok-skip-browser-warning: true" ${{ env.AI_PUBLIC_URL }}/health || echo "⚠️ AI health endpoint failed"
         
         # Kill port-forward processes
         kill $PF_PID $AI_PF_PID 2>/dev/null || true

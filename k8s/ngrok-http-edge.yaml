@@ -1,0 +1,9 @@
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: HTTPSEdge
+metadata:
+  name: ai-service-edge
+spec:
+  routes:
+  - match: /()
+    upstream:
+      url: http://ai-anomaly-detection-service.default:8000

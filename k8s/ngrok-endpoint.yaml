@@ -1,0 +1,8 @@
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: AgentEndpoint
+metadata:
+  name: ai-service-endpoint
+spec:
+  url: https://random-name.ngrok.app  # ngrok will replace this with a real random URL
+  upstream:
+    url: http://ai-anomaly-detection-service.default:8000

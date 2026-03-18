@@ -1,0 +1,8 @@
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: CloudEndpoint
+metadata:
+  name: ai-service-cloud-endpoint
+spec:
+  url: https://ai-service.ngrok.app  # ngrok will assign a random domain on free plan
+  upstream:
+    url: http://ai-anomaly-detection-service.default:8000
