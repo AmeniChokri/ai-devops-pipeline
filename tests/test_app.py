@@ -15,7 +15,7 @@ def test_home_endpoint(client):
     """Test the home endpoint returns 200"""
     response = client.get('/')
     assert response.status_code == 200
-    assert b'SFE DevOps Pipeline' in response.data
+    assert b'SFE AI DevOps Pipeline' in response.data
 
 def test_health_endpoint(client):
     """Test the health endpoint returns healthy status"""
