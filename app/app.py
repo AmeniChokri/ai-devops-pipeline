@@ -18,18 +18,18 @@ ACTIVE_REQUESTS = Gauge('http_active_requests', 'Active requests')
 # Store startup time
 start_time = time.time()
 
-# AI service URL (from environment or default)
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
+# AI service URL - use the ngrok URL for production
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "https://nonskeptical-jerald-nonformalistic.ngrok-free.dev")
 
 def get_ai_metrics():
     """Fetch real-time metrics from AI service"""
     try:
-        response = requests.get(f"{AI_SERVICE_URL}/prometheus/status", timeout=3)
+        response = requests.get(f"{AI_SERVICE_URL}/prometheus/status", timeout=5)
         if response.status_code == 200:
             data = response.json()
             return data.get('metrics', {})
-    except:
-        pass
+    except Exception as e:
+        print(f"Error fetching AI metrics: {e}")
     # Return simulated data if AI service unavailable
     hour = datetime.datetime.now().hour
     base_load = 10 if 9 <= hour <= 17 else 3
@@ -43,11 +43,11 @@ def get_ai_metrics():
 def get_risk_score():
     """Get current risk score from AI service"""
     try:
-        response = requests.post(f"{AI_SERVICE_URL}/predict", json={}, timeout=3)
+        response = requests.post(f"{AI_SERVICE_URL}/predict", json={}, timeout=5)
         if response.status_code == 200:
             return response.json()
-    except:
-        pass
+    except Exception as e:
+        print(f"Error fetching risk score: {e}")
     return {
         'risk_score': random.uniform(0, 100),
         'is_anomaly': random.random() > 0.8,
