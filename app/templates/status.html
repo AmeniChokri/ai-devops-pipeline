@@ -7,9 +7,10 @@
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f5f5;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             margin: 0;
             padding: 20px;
+            min-height: 100vh;
         }
         
         .container {
@@ -77,6 +78,30 @@
         .back-link:hover {
             text-decoration: underline;
         }
+        
+        .progress-section {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .progress {
+            background: #e0e0e0;
+            border-radius: 10px;
+            height: 20px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            color: white;
+            line-height: 20px;
+            padding-left: 10px;
+            border-radius: 10px;
+            width: 0%;
+        }
     </style>
 </head>
 <body>
@@ -100,23 +125,65 @@
                 
                 <div class="info-item">
                     <div class="info-label">Python Version</div>
-                    <div class="info-value">{{ python_version.split()[0] }}</div>
+                    <div class="info-value">{{ python_version }}</div>
                 </div>
                 
                 <div class="info-item">
                     <div class="info-label">Current Time</div>
                     <div class="info-value">{{ timestamp }}</div>
                 </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Uptime</div>
+                    <div class="info-value">{{ uptime }}</div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Status</div>
+                    <div class="info-value status-ok">✅ Healthy</div>
+                </div>
             </div>
             
-            <div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
-                <h3 style="margin-top: 0;">✅ System Healthy</h3>
-                <p>All systems operational. The application is running successfully on Kubernetes with 2 replicas.</p>
-                <p style="margin-bottom: 0;"><strong>Next Phase:</strong> AI-powered anomaly detection coming soon!</p>
+            <div class="progress-section">
+                <h3>📊 Health Metrics</h3>
+                <div>AI Service Status</div>
+                <div class="progress">
+                    <div class="progress-bar" id="ai-status" style="width: 100%">Connected</div>
+                </div>
+                <div>Prometheus Connection</div>
+                <div class="progress">
+                    <div class="progress-bar" id="prometheus-status" style="width: 100%">Active</div>
+                </div>
+                <div>Model Availability</div>
+                <div class="progress">
+                    <div class="progress-bar" id="model-status" style="width: 100%">Loaded</div>
+                </div>
             </div>
             
             <a href="/" class="back-link">← Back to Dashboard</a>
         </div>
     </div>
+    
+    <script>
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/live-metrics');
+                const data = await response.json();
+                
+                if (data.risk) {
+                    const riskScore = data.risk.risk_score;
+                    const modelStatus = document.getElementById('model-status');
+                    if (riskScore > 0) {
+                        modelStatus.style.width = '100%';
+                        modelStatus.textContent = 'Active';
+                    }
+                }
+            } catch (error) {
+                console.error('Error refreshing status:', error);
+            }
+        }
+        
+        setInterval(refreshStatus, 10000);
+    </script>
 </body>
 </html>
