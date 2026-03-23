@@ -76,6 +76,7 @@ def home():
             uptime=int(time.time() - start_time)
         )
         REQUEST_COUNT.labels(method='GET', endpoint='/', status='200').inc()
+        REQUEST_LATENCY.labels(method='GET', endpoint='/').observe(time.time() - start_time)
         return response
     finally:
         ACTIVE_REQUESTS.dec()
@@ -83,37 +84,44 @@ def home():
 @app.route('/api')
 def api():
     ACTIVE_REQUESTS.inc()
-    start_time_req = time.time()
+    start_req = time.time()
     try:
         response_data = {
-            "message": "Hello from SFE DevOps Pipeline!",
+            "message": "Hello from SFE AI DevOps Pipeline!",
             "hostname": socket.gethostname(),
             "timestamp": datetime.datetime.now().isoformat(),
             "environment": os.getenv("ENV", "development"),
             "uptime_seconds": int(time.time() - start_time)
         }
         REQUEST_COUNT.labels(method='GET', endpoint='/api', status='200').inc()
-        REQUEST_LATENCY.labels(method='GET', endpoint='/api').observe(time.time() - start_time_req)
+        REQUEST_LATENCY.labels(method='GET', endpoint='/api').observe(time.time() - start_req)
         return jsonify(response_data)
+    except Exception as e:
+        ERROR_COUNT.labels(method='GET', endpoint='/api').inc()
+        REQUEST_COUNT.labels(method='GET', endpoint='/api', status='500').inc()
+        return jsonify({"error": str(e)}), 500
     finally:
         ACTIVE_REQUESTS.dec()
 
 @app.route('/health')
 def health():
+    REQUEST_COUNT.labels(method='GET', endpoint='/health', status='200').inc()
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.datetime.now().isoformat(),
-        "service": "sfe-devops-pipeline",
+        "service": "sfe-ai-devops-pipeline",
         "version": "2.0.0"
     }), 200
 
 @app.route('/metrics')
 def metrics():
+    """Prometheus metrics endpoint"""
     return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
 @app.route('/api/live-metrics')
 def live_metrics():
     """Dynamic endpoint for real-time metrics (for AJAX updates)"""
+    REQUEST_COUNT.labels(method='GET', endpoint='/api/live-metrics', status='200').inc()
     ai_metrics = get_ai_metrics()
     risk_data = get_risk_score()
     
@@ -140,6 +148,7 @@ def live_metrics():
 @app.route('/status')
 def status():
     uptime_seconds = int(time.time() - start_time)
+    REQUEST_COUNT.labels(method='GET', endpoint='/status', status='200').inc()
     return render_template('status.html',
         hostname=socket.gethostname(),
         environment=os.getenv("ENV", "development"),
