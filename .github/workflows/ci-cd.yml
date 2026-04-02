@@ -86,6 +86,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       
+    - name: Set lowercase repository name
+      run: |
+        echo "LOWERCASE_REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+      
     - name: Run Trivy vulnerability scanner on Docker image
       uses: aquasecurity/trivy-action@master
       with:
