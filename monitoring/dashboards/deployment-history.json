@@ -1,0 +1,75 @@
+{
+  "title": "Deployment History",
+  "panels": [
+    {
+      "title": "Deployment Count",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "count(kube_deployment_status_observed_generation{deployment=\"sfe-devops-app\"})"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0}
+    },
+    {
+      "title": "Current Version",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "kube_deployment_status_observed_generation{deployment=\"sfe-devops-app\"}"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 0}
+    },
+    {
+      "title": "Available Replicas",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "kube_deployment_status_replicas_available{deployment=\"sfe-devops-app\"}"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 0}
+    },
+    {
+      "title": "Risk Score Before Deployment",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "risk_score{job=\"ai-anomaly-detection-service\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+    },
+    {
+      "title": "Pod Status Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "up{job=\"sfe-devops-app-service\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+    },
+    {
+      "title": "Deployment Success Rate",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "kube_deployment_status_condition{deployment=\"sfe-devops-app\", condition=\"Available\", status=\"true\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}
+    },
+    {
+      "title": "Pod Restarts (Deployment Related)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kube_pod_container_status_restarts_total{namespace=\"default\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}
+    }
+  ]
+}

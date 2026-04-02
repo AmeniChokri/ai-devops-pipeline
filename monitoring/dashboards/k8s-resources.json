@@ -1,0 +1,71 @@
+{
+  "title": "Kubernetes Resources",
+  "panels": [
+    {
+      "title": "CPU Usage by Pod",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"default\", pod=~\"sfe-devops-app.*\"}[5m])) by (pod)"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "title": "Memory Usage by Pod",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{namespace=\"default\", pod=~\"sfe-devops-app.*\"}) by (pod)"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "title": "CPU Requests vs Limits",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(kube_pod_container_resource_requests{resource=\"cpu\", namespace=\"default\"})"
+        },
+        {
+          "expr": "sum(kube_pod_container_resource_limits{resource=\"cpu\", namespace=\"default\"})"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "title": "Memory Requests vs Limits",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(kube_pod_container_resource_requests{resource=\"memory\", namespace=\"default\"})"
+        },
+        {
+          "expr": "sum(kube_pod_container_resource_limits{resource=\"memory\", namespace=\"default\"})"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+    },
+    {
+      "title": "Network Traffic",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"default\", pod=~\"sfe-devops-app.*\"}[5m])) by (pod)"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+    },
+    {
+      "title": "Pod Restarts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kube_pod_container_status_restarts_total{namespace=\"default\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "title": "Application Health & SLA",
+  "panels": [
+    {
+      "title": "Application Uptime",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "avg(up{job=\"sfe-devops-app-service\"}) * 100"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+    },
+    {
+      "title": "Total Requests (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(http_requests_total{job=\"sfe-devops-app-service\"}[24h]))"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}
+    },
+    {
+      "title": "Error Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(http_errors_total{job=\"sfe-devops-app-service\"}[5m])) / sum(rate(http_requests_total{job=\"sfe-devops-app-service\"}[5m])) * 100"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}
+    },
+    {
+      "title": "Active Pods",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "count(up{job=\"sfe-devops-app-service\"})"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0}
+    },
+    {
+      "title": "Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"sfe-devops-app-service\"}[1m]))"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+    },
+    {
+      "title": "Error Rate Trend",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_errors_total{job=\"sfe-devops-app-service\"}[1m])) / sum(rate(http_requests_total{job=\"sfe-devops-app-service\"}[1m])) * 100"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+    },
+    {
+      "title": "Response Time (P95)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12}
+    },
+    {
+      "title": "Health Check Status",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "up{job=\"sfe-devops-app-service\"}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12}
+    }
+  ]
+}
