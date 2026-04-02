@@ -86,12 +86,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       
-    - name: Install jq, bc and mailutils
-      run: sudo apt-get update && sudo apt-get install -y jq bc mailutils
+    - name: Install jq and bc
+      run: sudo apt-get update && sudo apt-get install -y jq bc
       
     - name: Call AI service for REAL risk assessment
       env:
         AI_PUBLIC_URL: ${{ env.AI_PUBLIC_URL }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: |
         echo "🔍 Getting REAL risk assessment from AI service at $AI_PUBLIC_URL..."
         echo "This uses actual Prometheus metrics from your running cluster!"
@@ -114,62 +116,79 @@ jobs:
         echo "🔍 Is Anomaly: $IS_ANOMALY"
         echo "💬 Recommendation: $RECOMMENDATION"
         
-        # Determine status based on risk score
+        # Determine status
         if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
           STATUS="🔴 BLOCKED - Deployment Stopped"
-          STATUS_CODE="BLOCKED"
+          STATUS_COLOR="red"
         elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
           STATUS="🟡 WARNING - Manual Review Recommended"
-          STATUS_CODE="WARNING"
+          STATUS_COLOR="orange"
         else
           STATUS="🟢 APPROVED - Safe to Deploy"
-          STATUS_CODE="APPROVED"
+          STATUS_COLOR="green"
         fi
-        
-        # Create email content
-        cat << EOF > /tmp/risk_notification.txt
-        To: amenichokri2002@gmail.com
-        Subject: [DevOps Alert] AI Risk Assessment Report - Score: ${RISK_SCORE}%
-        MIME-Version: 1.0
-        Content-Type: text/plain; charset=utf-8
-        
-        ═══════════════════════════════════════════════════════════
-                    AI DEVOPS RISK ASSESSMENT REPORT
-        ═══════════════════════════════════════════════════════════
-        
-        📊 RISK SCORE: ${RISK_SCORE}%
-        🚦 STATUS: ${STATUS}
-        
-        📈 METRICS ANALYZED:
-           • CPU Usage: ${CPU}%
-           • Memory Usage: ${MEMORY}%
-           • Request Rate: ${REQUEST_RATE}/s
-           • Error Rate: ${ERROR_RATE}%
-           • Combined Score: ${COMBINED}
-        
-        🔍 ANOMALY DETECTED: ${IS_ANOMALY}
-        
-        💬 AI RECOMMENDATION: 
-           ${RECOMMENDATION}
-        
-        📋 DEPLOYMENT INFORMATION:
-           • Timestamp: $(date)
-           • Commit SHA: ${{ github.sha }}
-           • Author: ${{ github.actor }}
-           • Repository: ${{ github.repository }}
-           • Branch: ${{ github.ref_name }}
-           • Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        
-        ═══════════════════════════════════════════════════════════
-        This is an automated message from your AI DevOps Pipeline.
-        Threshold: Risk > 90% blocks deployment.
-        ═══════════════════════════════════════════════════════════
-        EOF
         
         # Send email notification if risk is moderate or high (>70%)
         if (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
-          sendmail amenichokri2002@gmail.com < /tmp/risk_notification.txt
-          echo "📧 Risk notification email sent to amenichokri2002@gmail.com"
+          echo "📧 Sending email notification to amenichokri2002@gmail.com..."
+          
+          cat << EOF > email_body.txt
+        From: DevOps AI Pipeline <${EMAIL_USER}>
+        To: amenichokri2002@gmail.com
+        Subject: [DevOps Alert] AI Risk Assessment - Score: ${RISK_SCORE}%
+        MIME-Version: 1.0
+        Content-Type: text/html; charset=utf-8
+        
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+        <h2>🤖 AI DevOps Risk Assessment Report</h2>
+        <hr>
+        <h3>Risk Score: <span style="color: ${STATUS_COLOR};">${RISK_SCORE}%</span></h3>
+        <p><strong>Status:</strong> ${STATUS}</p>
+        
+        <h3>📈 Metrics Analyzed:</h3>
+        <ul>
+          <li><strong>CPU Usage:</strong> ${CPU}%</li>
+          <li><strong>Memory Usage:</strong> ${MEMORY}%</li>
+          <li><strong>Request Rate:</strong> ${REQUEST_RATE}/s</li>
+          <li><strong>Error Rate:</strong> ${ERROR_RATE}%</li>
+          <li><strong>Combined Score:</strong> ${COMBINED}</li>
+        </ul>
+        
+        <h3>🔍 Anomaly Detected:</h3>
+        <p>${IS_ANOMALY}</p>
+        
+        <h3>💬 AI Recommendation:</h3>
+        <p>${RECOMMENDATION}</p>
+        
+        <h3>📋 Deployment Information:</h3>
+        <ul>
+          <li><strong>Timestamp:</strong> $(date)</li>
+          <li><strong>Commit SHA:</strong> ${{ github.sha }}</li>
+          <li><strong>Author:</strong> ${{ github.actor }}</li>
+          <li><strong>Repository:</strong> ${{ github.repository }}</li>
+          <li><strong>Branch:</strong> ${{ github.ref_name }}</li>
+          <li><strong>Run URL:</strong> <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">View Run</a></li>
+        </ul>
+        <hr>
+        <p><small>This is an automated message from your AI DevOps Pipeline.</small></p>
+        </body>
+        </html>
+        EOF
+          
+          # Send email using curl SMTP
+          curl --ssl-reqd \
+            --url 'smtps://smtp.gmail.com:465' \
+            --user "${EMAIL_USER}:${EMAIL_PASSWORD}" \
+            --mail-from "${EMAIL_USER}" \
+            --mail-rcpt "amenichokri2002@gmail.com" \
+            --upload-file email_body.txt
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Email notification sent successfully to amenichokri2002@gmail.com"
+          else
+            echo "⚠️ Failed to send email notification"
+          fi
         else
           echo "✅ Risk score acceptable - no notification sent"
         fi
@@ -181,7 +200,6 @@ jobs:
           exit 1
         elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
           echo "⚠️ MODERATE RISK. Manual review recommended before deployment."
-          echo "Notification sent to amenichokri2002@gmail.com"
         else
           echo "✅ LOW RISK. Proceeding with deployment."
         fi
