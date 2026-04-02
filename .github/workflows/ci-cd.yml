@@ -77,14 +77,6 @@ jobs:
         file: ./ai/Dockerfile
         push: true
         tags: ${{ env.AI_IMAGE }}
-        
-    - name: Get previous deployment version
-      id: previous_version
-      run: |
-        # Get the previous commit hash
-        PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
-        echo "PREVIOUS_COMMIT=$PREVIOUS_COMMIT" >> $GITHUB_ENV
-        echo "Previous version: $PREVIOUS_COMMIT"
 
   check-ai-risk:
     needs: build-and-push
@@ -126,7 +118,6 @@ jobs:
         echo "risk_score=$RISK_SCORE" >> $GITHUB_OUTPUT
         echo "📊 Risk Score: $RISK_SCORE%"
         
-        # Determine if rollback is needed
         if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
           echo "should_rollback=true" >> $GITHUB_OUTPUT
           STATUS="🔴 BLOCKED - Auto-rollback triggered"
@@ -144,7 +135,6 @@ jobs:
           ACTION="APPROVE"
         fi
         
-        # Send email notification if risk is moderate or high (>70%)
         if (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
           cat << EOF > email_body.txt
         From: DevOps AI Pipeline <${EMAIL_USER}>
@@ -260,6 +250,11 @@ jobs:
         kind load docker-image ${{ env.AI_IMAGE }} --name kind
         echo "✅ AI image loaded into Kind"
       
+    - name: Verify images are loaded
+      run: |
+        echo "📦 Checking loaded images in Kind cluster..."
+        docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl"
+      
     - name: Deploy applications to Kind Cluster
       id: deploy
       run: |
@@ -276,15 +271,17 @@ jobs:
         echo "📊 Pod Status:"
         kubectl get pods
         
-        # Save current version for potential rollback
-        kubectl get deployment sfe-devops-app -o yaml > /tmp/current_deployment.yaml
         echo "✅ Deployment completed"
       
     - name: Post-deployment AI health check
       if: success()
+      env:
+        AI_PUBLIC_URL: ${{ env.AI_PUBLIC_URL }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: |
         echo "🔍 Running post-deployment AI health check..."
-        sleep 30  # Wait for deployment to stabilize
+        sleep 30
         
         RESPONSE=$(curl -s -X POST ${AI_PUBLIC_URL}/predict \
           -H "Content-Type: application/json" \
@@ -304,10 +301,12 @@ jobs:
       
     - name: Auto-Rollback to Previous Version
       if: failure() || env.rollback_needed == 'true'
+      env:
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: |
         echo "🔄 Initiating AUTO-ROLLBACK to previous stable version..."
         
-        # Send rollback notification email
         cat << EOF > rollback_email.txt
         From: DevOps AI Pipeline <${EMAIL_USER}>
         To: amenichokri2002@gmail.com
@@ -350,13 +349,10 @@ jobs:
           --mail-rcpt "amenichokri2002@gmail.com" \
           --upload-file rollback_email.txt
         
-        # Perform the rollback
         kubectl rollout undo deployment/sfe-devops-app
         kubectl rollout status deployment/sfe-devops-app --timeout=120s
         
         echo "✅ Auto-rollback completed. Previous version is now active."
-        
-        # Mark the pipeline as failed
         exit 1
       
     - name: Debug if failed
