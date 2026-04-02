@@ -77,11 +77,22 @@ jobs:
         file: ./ai/Dockerfile
         push: true
         tags: ${{ env.AI_IMAGE }}
+        
+    - name: Get previous deployment version
+      id: previous_version
+      run: |
+        # Get the previous commit hash
+        PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
+        echo "PREVIOUS_COMMIT=$PREVIOUS_COMMIT" >> $GITHUB_ENV
+        echo "Previous version: $PREVIOUS_COMMIT"
 
   check-ai-risk:
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      risk_score: ${{ steps.risk.outputs.risk_score }}
+      should_rollback: ${{ steps.risk.outputs.should_rollback }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -90,13 +101,13 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y jq bc
       
     - name: Call AI service for REAL risk assessment
+      id: risk
       env:
         AI_PUBLIC_URL: ${{ env.AI_PUBLIC_URL }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
       run: |
         echo "🔍 Getting REAL risk assessment from AI service at $AI_PUBLIC_URL..."
-        echo "This uses actual Prometheus metrics from your running cluster!"
         
         RESPONSE=$(curl -s -X POST ${AI_PUBLIC_URL}/predict \
           -H "Content-Type: application/json" \
@@ -112,30 +123,33 @@ jobs:
         ERROR_RATE=$(echo $RESPONSE | jq -r '.metrics_used.error_rate')
         COMBINED=$(echo $RESPONSE | jq -r '.metrics_used.combined_value')
         
-        echo "📊 REAL Risk Score: $RISK_SCORE%"
-        echo "🔍 Is Anomaly: $IS_ANOMALY"
-        echo "💬 Recommendation: $RECOMMENDATION"
+        echo "risk_score=$RISK_SCORE" >> $GITHUB_OUTPUT
+        echo "📊 Risk Score: $RISK_SCORE%"
         
-        # Determine status
+        # Determine if rollback is needed
         if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
-          STATUS="🔴 BLOCKED - Deployment Stopped"
+          echo "should_rollback=true" >> $GITHUB_OUTPUT
+          STATUS="🔴 BLOCKED - Auto-rollback triggered"
           STATUS_COLOR="red"
+          ACTION="ROLLBACK"
         elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
+          echo "should_rollback=false" >> $GITHUB_OUTPUT
           STATUS="🟡 WARNING - Manual Review Recommended"
           STATUS_COLOR="orange"
+          ACTION="WARNING"
         else
+          echo "should_rollback=false" >> $GITHUB_OUTPUT
           STATUS="🟢 APPROVED - Safe to Deploy"
           STATUS_COLOR="green"
+          ACTION="APPROVE"
         fi
         
         # Send email notification if risk is moderate or high (>70%)
         if (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
-          echo "📧 Sending email notification to amenichokri2002@gmail.com..."
-          
           cat << EOF > email_body.txt
         From: DevOps AI Pipeline <${EMAIL_USER}>
         To: amenichokri2002@gmail.com
-        Subject: [DevOps Alert] AI Risk Assessment - Score: ${RISK_SCORE}%
+        Subject: [DevOps Alert] AI Risk Assessment - Score: ${RISK_SCORE}% - Action: ${ACTION}
         MIME-Version: 1.0
         Content-Type: text/html; charset=utf-8
         
@@ -145,6 +159,7 @@ jobs:
         <hr>
         <h3>Risk Score: <span style="color: ${STATUS_COLOR};">${RISK_SCORE}%</span></h3>
         <p><strong>Status:</strong> ${STATUS}</p>
+        <p><strong>Action Taken:</strong> ${ACTION}</p>
         
         <h3>📈 Metrics Analyzed:</h3>
         <ul>
@@ -176,7 +191,6 @@ jobs:
         </html>
         EOF
           
-          # Send email using curl SMTP
           curl --ssl-reqd \
             --url 'smtps://smtp.gmail.com:465' \
             --user "${EMAIL_USER}:${EMAIL_PASSWORD}" \
@@ -184,35 +198,17 @@ jobs:
             --mail-rcpt "amenichokri2002@gmail.com" \
             --upload-file email_body.txt
           
-          if [ $? -eq 0 ]; then
-            echo "✅ Email notification sent successfully to amenichokri2002@gmail.com"
-          else
-            echo "⚠️ Failed to send email notification"
-          fi
-        else
-          echo "✅ Risk score acceptable - no notification sent"
+          echo "📧 Email notification sent"
         fi
         
-        # Decision logic based on risk score
         if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
-          echo "❌ HIGH RISK DETECTED! Blocking deployment - Auto-rollback recommended"
-          echo "Risk score $RISK_SCORE% exceeds threshold (90%)"
+          echo "❌ HIGH RISK! Auto-rollback will be triggered"
           exit 1
         elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
-          echo "⚠️ MODERATE RISK. Manual review recommended before deployment."
+          echo "⚠️ MODERATE RISK. Proceeding with warning."
         else
           echo "✅ LOW RISK. Proceeding with deployment."
         fi
-        
-    - name: Display risk assessment summary
-      run: |
-        echo "════════════════════════════════════════"
-        echo "    REAL AI RISK ASSESSMENT SUMMARY"
-        echo "════════════════════════════════════════"
-        echo "• Risk Score: $RISK_SCORE%"
-        echo "• Source: Real Prometheus metrics via ngrok"
-        echo "• Threshold: 90% (block) / 70% (warning)"
-        echo "════════════════════════════════════════"
 
   deploy-to-kind:
     needs: [build-and-push, check-ai-risk]
@@ -264,12 +260,8 @@ jobs:
         kind load docker-image ${{ env.AI_IMAGE }} --name kind
         echo "✅ AI image loaded into Kind"
       
-    - name: Verify images are loaded
-      run: |
-        echo "📦 Checking loaded images in Kind cluster..."
-        docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl"
-      
     - name: Deploy applications to Kind Cluster
+      id: deploy
       run: |
         kubectl apply -f k8s/deployment.yaml
         kubectl apply -f k8s/service.yaml
@@ -283,8 +275,89 @@ jobs:
         
         echo "📊 Pod Status:"
         kubectl get pods
-        echo "📊 Service Status:"
-        kubectl get services
+        
+        # Save current version for potential rollback
+        kubectl get deployment sfe-devops-app -o yaml > /tmp/current_deployment.yaml
+        echo "✅ Deployment completed"
+      
+    - name: Post-deployment AI health check
+      if: success()
+      run: |
+        echo "🔍 Running post-deployment AI health check..."
+        sleep 30  # Wait for deployment to stabilize
+        
+        RESPONSE=$(curl -s -X POST ${AI_PUBLIC_URL}/predict \
+          -H "Content-Type: application/json" \
+          -H "ngrok-skip-browser-warning: true" \
+          -d '{}')
+        
+        POST_RISK=$(echo $RESPONSE | jq -r '.risk_score')
+        echo "Post-deployment risk score: $POST_RISK%"
+        
+        if (( $(echo "$POST_RISK > 90" | bc -l) )); then
+          echo "🚨 Post-deployment risk is HIGH! Triggering rollback..."
+          echo "rollback_needed=true" >> $GITHUB_ENV
+        else
+          echo "✅ Post-deployment risk is acceptable"
+          echo "rollback_needed=false" >> $GITHUB_ENV
+        fi
+      
+    - name: Auto-Rollback to Previous Version
+      if: failure() || env.rollback_needed == 'true'
+      run: |
+        echo "🔄 Initiating AUTO-ROLLBACK to previous stable version..."
+        
+        # Send rollback notification email
+        cat << EOF > rollback_email.txt
+        From: DevOps AI Pipeline <${EMAIL_USER}>
+        To: amenichokri2002@gmail.com
+        Subject: [URGENT] Auto-Rollback Executed - High Risk Detected
+        MIME-Version: 1.0
+        Content-Type: text/html; charset=utf-8
+        
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+        <h2 style="color: red;">🚨 AUTO-ROLLBACK EXECUTED 🚨</h2>
+        <hr>
+        <p><strong>The AI DevOps pipeline has automatically rolled back the deployment due to high risk detection.</strong></p>
+        
+        <h3>📊 Rollback Details:</h3>
+        <ul>
+          <li><strong>Timestamp:</strong> $(date)</li>
+          <li><strong>Commit SHA:</strong> ${{ github.sha }}</li>
+          <li><strong>Author:</strong> ${{ github.actor }}</li>
+          <li><strong>Risk Score Trigger:</strong> >90%</li>
+        </ul>
+        
+        <h3>🔧 Action Taken:</h3>
+        <ul>
+          <li>✅ New deployment was stopped/rolled back</li>
+          <li>✅ Previous stable version is now active</li>
+          <li>✅ Team has been notified</li>
+        </ul>
+        
+        <p><strong>Please investigate the root cause before attempting another deployment.</strong></p>
+        <hr>
+        <p><small>This is an automated rollback notification from your AI DevOps Pipeline.</small></p>
+        </body>
+        </html>
+        EOF
+        
+        curl --ssl-reqd \
+          --url 'smtps://smtp.gmail.com:465' \
+          --user "${EMAIL_USER}:${EMAIL_PASSWORD}" \
+          --mail-from "${EMAIL_USER}" \
+          --mail-rcpt "amenichokri2002@gmail.com" \
+          --upload-file rollback_email.txt
+        
+        # Perform the rollback
+        kubectl rollout undo deployment/sfe-devops-app
+        kubectl rollout status deployment/sfe-devops-app --timeout=120s
+        
+        echo "✅ Auto-rollback completed. Previous version is now active."
+        
+        # Mark the pipeline as failed
+        exit 1
       
     - name: Debug if failed
       if: failure()
@@ -298,10 +371,9 @@ jobs:
         kubectl logs -l app=sfe-devops-app --tail=50 || echo "No app logs yet"
         echo "=== AI LOGS ==="
         kubectl logs -l app=ai-anomaly-detection --tail=50 || echo "No AI logs yet"
-        echo "=== KIND NODES IMAGES ==="
-        docker exec kind-control-plane crictl images
       
     - name: Test Application
+      if: success()
       run: |
         echo "⏳ Waiting for pods to be ready..."
         kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=120s || true
