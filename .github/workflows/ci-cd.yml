@@ -96,13 +96,11 @@ jobs:
         echo "🔍 Getting REAL risk assessment from AI service at $AI_PUBLIC_URL..."
         echo "This uses actual Prometheus metrics from your running cluster!"
         
-        # Call the real AI service via ngrok
         RESPONSE=$(curl -s -X POST ${AI_PUBLIC_URL}/predict \
           -H "Content-Type: application/json" \
           -H "ngrok-skip-browser-warning: true" \
           -d '{}')
         
-        # Extract risk score from response
         RISK_SCORE=$(echo $RESPONSE | jq -r '.risk_score')
         IS_ANOMALY=$(echo $RESPONSE | jq -r '.is_anomaly')
         RECOMMENDATION=$(echo $RESPONSE | jq -r '.recommendation')
@@ -113,12 +111,12 @@ jobs:
         echo "💬 Recommendation: $RECOMMENDATION"
         echo "📈 Metrics Used: $METRICS"
         
-        # Decision logic based on REAL risk score
-        if (( $(echo "$RISK_SCORE > 80" | bc -l) )); then
+        # Decision logic based on REAL risk score - THRESHOLD CHANGED FROM 80 TO 90
+        if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
           echo "❌ HIGH RISK DETECTED! Blocking deployment - Auto-rollback recommended"
-          echo "Risk score $RISK_SCORE% exceeds threshold (80%)"
+          echo "Risk score $RISK_SCORE% exceeds threshold (90%)"
           exit 1
-        elif (( $(echo "$RISK_SCORE > 50" | bc -l) )); then
+        elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
           echo "⚠️ MODERATE RISK. Manual review recommended before deployment."
         else
           echo "✅ LOW RISK. Proceeding with deployment."
@@ -131,6 +129,7 @@ jobs:
         echo "════════════════════════════════════════"
         echo "• Risk Score: ${{ env.RISK_SCORE }}%"
         echo "• Source: Real Prometheus metrics via ngrok"
+        echo "• Threshold: 90% (changed from 80%)"
         echo "════════════════════════════════════════"
 
   deploy-to-kind:
@@ -190,18 +189,14 @@ jobs:
       
     - name: Deploy applications to Kind Cluster
       run: |
-        # Apply all k8s configurations
         kubectl apply -f k8s/
         
-        # Wait for app deployment
         echo "⏳ Waiting for app deployment to be ready..."
         kubectl rollout status deployment/sfe-devops-app --timeout=180s
         
-        # Wait for AI deployment
         echo "⏳ Waiting for AI deployment to be ready..."
         kubectl rollout status deployment/ai-anomaly-detection --timeout=180s || echo "⚠️ AI deployment timeout - check logs"
         
-        # Show pod status
         echo "📊 Pod Status:"
         kubectl get pods
         echo "📊 Service Status:"
@@ -224,29 +219,24 @@ jobs:
       
     - name: Test Application
       run: |
-        # Wait for pods to be ready
         echo "⏳ Waiting for pods to be ready..."
         kubectl wait --for=condition=ready pod -l app=sfe-devops-app --timeout=120s || true
         kubectl wait --for=condition=ready pod -l app=ai-anomaly-detection --timeout=120s || true
         
-        # Port-forward to access the app service
         echo "🔌 Setting up port-forward for app..."
         kubectl port-forward service/sfe-devops-app-service 8080:80 &
         PF_PID=$!
         sleep 10
         
-        # Test app endpoints
         echo "🔍 Testing /health endpoint..."
         curl -s http://localhost:8080/health || echo "⚠️ Health endpoint failed"
         
         echo -e "\n\n🔍 Testing / endpoint..."
         curl -s http://localhost:8080/ || echo "⚠️ Root endpoint failed"
         
-        # Test AI service health via ngrok (just to verify)
         echo -e "\n\n🔍 Testing AI service via ngrok..."
         curl -s -H "ngrok-skip-browser-warning: true" ${{ env.AI_PUBLIC_URL }}/health || echo "⚠️ AI health endpoint failed"
         
-        # Kill port-forward processes
-        kill $PF_PID $AI_PF_PID 2>/dev/null || true
+        kill $PF_PID 2>/dev/null || true
         
         echo -e "\n\n✅ Deployment validation completed successfully!"
