@@ -174,15 +174,26 @@ jobs:
     - name: Load app image into Kind
       run: |
         kind load docker-image ghcr.io/${{ env.LOWERCASE_REPO }}:latest --name kind
+        echo "✅ App image loaded into Kind"
       
     - name: Load AI image into Kind
       run: |
         kind load docker-image ${{ env.AI_IMAGE }} --name kind
+        echo "✅ AI image loaded into Kind"
       
     - name: Verify images are loaded
       run: |
         echo "📦 Checking loaded images in Kind cluster..."
-        docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl, but continuing"
+        docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl"
+      
+    - name: Create GHCR secret for image pulling (fallback)
+      run: |
+        kubectl create secret docker-registry ghcr-secret \
+          --docker-server=ghcr.io \
+          --docker-username=${{ github.actor }} \
+          --docker-password=${{ secrets.GHCR_PAT }} \
+          --docker-email=amenichokri2002@gmail.com \
+          --dry-run=client -o yaml | kubectl apply -f -
       
     - name: Deploy applications to Kind Cluster
       run: |
@@ -208,11 +219,11 @@ jobs:
         echo "=== POD DESCRIPTIONS ==="
         kubectl describe pods
         echo "=== APP LOGS ==="
-        kubectl logs -l app=sfe-devops-app --tail=50
+        kubectl logs -l app=sfe-devops-app --tail=50 || echo "No app logs yet"
         echo "=== AI LOGS ==="
-        kubectl logs -l app=ai-anomaly-detection --tail=50
-        echo "=== EVENTS ==="
-        kubectl get events --sort-by='.lastTimestamp'
+        kubectl logs -l app=ai-anomaly-detection --tail=50 || echo "No AI logs yet"
+        echo "=== KIND NODES IMAGES ==="
+        docker exec kind-control-plane crictl images
       
     - name: Test Application
       run: |
@@ -230,9 +241,6 @@ jobs:
         
         echo -e "\n\n🔍 Testing / endpoint..."
         curl -s http://localhost:8080/ || echo "⚠️ Root endpoint failed"
-        
-        echo -e "\n\n🔍 Testing AI service via ngrok..."
-        curl -s -H "ngrok-skip-browser-warning: true" ${{ env.AI_PUBLIC_URL }}/health || echo "⚠️ AI health endpoint failed"
         
         kill $PF_PID 2>/dev/null || true
         
