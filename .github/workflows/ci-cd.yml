@@ -86,8 +86,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       
-    - name: Install jq and bc
-      run: sudo apt-get update && sudo apt-get install -y jq bc
+    - name: Install jq, bc and mailutils
+      run: sudo apt-get update && sudo apt-get install -y jq bc mailutils
       
     - name: Call AI service for REAL risk assessment
       env:
@@ -104,19 +104,84 @@ jobs:
         RISK_SCORE=$(echo $RESPONSE | jq -r '.risk_score')
         IS_ANOMALY=$(echo $RESPONSE | jq -r '.is_anomaly')
         RECOMMENDATION=$(echo $RESPONSE | jq -r '.recommendation')
-        METRICS=$(echo $RESPONSE | jq -r '.metrics_used')
+        CPU=$(echo $RESPONSE | jq -r '.metrics_used.cpu_usage')
+        MEMORY=$(echo $RESPONSE | jq -r '.metrics_used.memory_usage')
+        REQUEST_RATE=$(echo $RESPONSE | jq -r '.metrics_used.request_rate')
+        ERROR_RATE=$(echo $RESPONSE | jq -r '.metrics_used.error_rate')
+        COMBINED=$(echo $RESPONSE | jq -r '.metrics_used.combined_value')
         
         echo "📊 REAL Risk Score: $RISK_SCORE%"
         echo "🔍 Is Anomaly: $IS_ANOMALY"
         echo "💬 Recommendation: $RECOMMENDATION"
-        echo "📈 Metrics Used: $METRICS"
         
+        # Determine status based on risk score
+        if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
+          STATUS="🔴 BLOCKED - Deployment Stopped"
+          STATUS_CODE="BLOCKED"
+        elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
+          STATUS="🟡 WARNING - Manual Review Recommended"
+          STATUS_CODE="WARNING"
+        else
+          STATUS="🟢 APPROVED - Safe to Deploy"
+          STATUS_CODE="APPROVED"
+        fi
+        
+        # Create email content
+        cat << EOF > /tmp/risk_notification.txt
+        To: amenichokri2002@gmail.com
+        Subject: [DevOps Alert] AI Risk Assessment Report - Score: ${RISK_SCORE}%
+        MIME-Version: 1.0
+        Content-Type: text/plain; charset=utf-8
+        
+        ═══════════════════════════════════════════════════════════
+                    AI DEVOPS RISK ASSESSMENT REPORT
+        ═══════════════════════════════════════════════════════════
+        
+        📊 RISK SCORE: ${RISK_SCORE}%
+        🚦 STATUS: ${STATUS}
+        
+        📈 METRICS ANALYZED:
+           • CPU Usage: ${CPU}%
+           • Memory Usage: ${MEMORY}%
+           • Request Rate: ${REQUEST_RATE}/s
+           • Error Rate: ${ERROR_RATE}%
+           • Combined Score: ${COMBINED}
+        
+        🔍 ANOMALY DETECTED: ${IS_ANOMALY}
+        
+        💬 AI RECOMMENDATION: 
+           ${RECOMMENDATION}
+        
+        📋 DEPLOYMENT INFORMATION:
+           • Timestamp: $(date)
+           • Commit SHA: ${{ github.sha }}
+           • Author: ${{ github.actor }}
+           • Repository: ${{ github.repository }}
+           • Branch: ${{ github.ref_name }}
+           • Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        
+        ═══════════════════════════════════════════════════════════
+        This is an automated message from your AI DevOps Pipeline.
+        Threshold: Risk > 90% blocks deployment.
+        ═══════════════════════════════════════════════════════════
+        EOF
+        
+        # Send email notification if risk is moderate or high (>70%)
+        if (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
+          sendmail amenichokri2002@gmail.com < /tmp/risk_notification.txt
+          echo "📧 Risk notification email sent to amenichokri2002@gmail.com"
+        else
+          echo "✅ Risk score acceptable - no notification sent"
+        fi
+        
+        # Decision logic based on risk score
         if (( $(echo "$RISK_SCORE > 90" | bc -l) )); then
           echo "❌ HIGH RISK DETECTED! Blocking deployment - Auto-rollback recommended"
           echo "Risk score $RISK_SCORE% exceeds threshold (90%)"
           exit 1
         elif (( $(echo "$RISK_SCORE > 70" | bc -l) )); then
           echo "⚠️ MODERATE RISK. Manual review recommended before deployment."
+          echo "Notification sent to amenichokri2002@gmail.com"
         else
           echo "✅ LOW RISK. Proceeding with deployment."
         fi
@@ -128,7 +193,7 @@ jobs:
         echo "════════════════════════════════════════"
         echo "• Risk Score: $RISK_SCORE%"
         echo "• Source: Real Prometheus metrics via ngrok"
-        echo "• Threshold: 90%"
+        echo "• Threshold: 90% (block) / 70% (warning)"
         echo "════════════════════════════════════════"
 
   deploy-to-kind:
