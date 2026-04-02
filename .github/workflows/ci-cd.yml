@@ -186,24 +186,17 @@ jobs:
         echo "📦 Checking loaded images in Kind cluster..."
         docker exec kind-control-plane crictl images | grep -E "ai-devops|ai-devops-pipeline-ai" || echo "⚠️ Some images not found in crictl"
       
-    - name: Create GHCR secret for image pulling (fallback)
-      run: |
-        kubectl create secret docker-registry ghcr-secret \
-          --docker-server=ghcr.io \
-          --docker-username=${{ github.actor }} \
-          --docker-password=${{ secrets.GHCR_PAT }} \
-          --docker-email=amenichokri2002@gmail.com \
-          --dry-run=client -o yaml | kubectl apply -f -
-      
     - name: Deploy applications to Kind Cluster
       run: |
-        kubectl apply -f k8s/
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s/ai-service.yaml
         
         echo "⏳ Waiting for app deployment to be ready..."
         kubectl rollout status deployment/sfe-devops-app --timeout=180s
         
         echo "⏳ Waiting for AI deployment to be ready..."
-        kubectl rollout status deployment/ai-anomaly-detection --timeout=180s || echo "⚠️ AI deployment timeout - check logs"
+        kubectl rollout status deployment/ai-anomaly-detection --timeout=180s
         
         echo "📊 Pod Status:"
         kubectl get pods
